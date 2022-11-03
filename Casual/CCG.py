@@ -2,31 +2,49 @@ import asyncio
 import PySimpleGUI as sg
 from datetime import datetime, date
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-import playwright
 from playwright.async_api import async_playwright, expect
+
+
+def make_win1():
+    addreses = ["https://www.cinema-city.pl/kina/kinepolis/1081#/",
+                "https://www.cinema-city.pl/kina/poznanplaza/1078#/",
+                "https://www.cinema-city.pl/kina/wroclavia/1097#/",
+                "https://www.cinema-city.pl/kina/korona/1067#/",
+                "https://www.cinema-city.pl/kina/mokotow/1070#/"
+                ]
+
+    layout_main = [
+        [sg.Text("Address")],
+        [sg.Combo(addreses, size=(50, 1), default_value=addreses[0], key="address")],
+        [sg.Input(size=(30, 1), default_text=str(date.today()), key="date"),
+         sg.CalendarButton("Pick date", format="%Y-%m-%d", size=(11, 1), key="calendar")],
+        [sg.Button("Ok", disabled=False, key="ok")],
+    ]
+    return sg.Window("Cinema Grabber", layout_main, element_justification='center', finalize=True)
 
 
 def main():
     sg.theme("DarkAmber")
 
-    layout_main = [
-        [sg.Text("Address")],
-        [sg.Input(size=(50, 1), default_text="https://www.cinema-city.pl/kina/kinepolis/1081#/", key="address")],
-        [sg.Input(size=(30, 1), default_text=str(date.today()), key="date"),
-         sg.CalendarButton("Pick date", format="%Y-%m-%d", size=(11, 1), key="calendar")],
-        [sg.Button("Ok", disabled=False, key="ok")],
-    ]
+    window1, window2 = make_win1(), None
 
-    window1 = sg.Window("Cinema Grabber", layout_main, element_justification='center')
+    tabs_no = 0
 
     while True:
-        event, values = window1.read()
-        if event == sg.WIN_CLOSED:
+        window, event, values = sg.read_all_windows()
+        if event == sg.WIN_CLOSED and window == window1:
             break
+        if event == sg.WIN_CLOSED and window == window2:
+            window2.close()
+        if event == 'calendar':
+            screenings_date = sg.popup_get_date()
+            if screenings_date:
+                month, day, year = screenings_date
+                window['date'].update(f"{year}-{month:0>2d}-{day:0>2d}")
         if event == "ok":
             day = datetime.strptime(values["date"], "%Y-%m-%d").date()
             address = values["address"] + "?at={}".format(day)
@@ -37,11 +55,17 @@ def main():
 
             window1["ok"].update(disabled=True)
         if event == "-END KEY-":
-            window1["ok"].update(disabled=False)
+            # todo more windows per launch
+            # window1["ok"].update(disabled=False)
+
+            movies_fetched = values[event]
 
             tab_group = [
                 [sg.Tab("Graph", [[sg.Canvas(key='-CANVAS-')]]),
-                 sg.Tab("List", [[sg.Column(column1, scrollable=True, vertical_scroll_only=True, size=(2000, 2000))]]),
+                 sg.Tab("List", [[
+                     sg.Button("-PRINT-"),
+                     sg.Column(column1, scrollable=True, vertical_scroll_only=True, size=(2000, 2000))
+                     ]]),
                  ],
             ]
             layout_screenings = [
@@ -50,9 +74,17 @@ def main():
 
             window2 = sg.Window("Screenings", layout_screenings, size=(1200, 600), finalize=True,
                                 element_justification='center')
-            fig_canvas_agg = draw_figure(window2['-CANVAS-'].TKCanvas, make_plot(values[event]))
+            draw_figure(window2['-CANVAS-'].TKCanvas, make_plot(movies_fetched))
 
             window2.reappear()
+
+        if event == "-PRINT-":
+            justChecked = [element[1] for element in values if values[element] == True and 'TITLE' in element]
+
+            window2['-TABGROUP-'].add_tab(sg.Tab("Graph", [[sg.Canvas(key=('-CANVAS2-', tabs_no))]]))
+            draw_figure(window2[('-CANVAS2-', tabs_no)].TKCanvas, make_plot(movies_fetched, justChecked))
+
+            tabs_no += 1
 
     window1.close()
 
@@ -61,18 +93,28 @@ def draw_figure(canvas, figure):
     figure_canvas_agg = FigureCanvasTkAgg(figure, canvas)
     figure_canvas_agg.draw()
     figure_canvas_agg.get_tk_widget().pack(side='top', fill='both', expand=1)
-    return figure_canvas_agg
 
 
-def make_plot(movies):
+def make_plot(movies, chosen=None):
     titles = []
     xs = []
     ys = []
-    for movie in movies:
-        for screen in movie.screenings:
-            titles.append("{} {} {}".format(movie.title, screen.movie_type, screen.movie_lang))
-            xs.append(list(map(lambda x: float(x.replace(":", ".")), screen.start_hours)))
-            ys.append(list(map(lambda x: float(x.replace(":", ".")), screen.end_hours)))
+    scr_cnt = 0
+
+    if chosen is None:
+        for movie in movies:
+            for screen in movie.screenings:
+                titles.append("{} {} {}".format(movie.title, screen.movie_type, screen.movie_lang))
+                xs.append(list(map(lambda x: float(norm_hours(x.replace(":", "."))), screen.start_hours)))
+                ys.append(list(map(lambda x: float(norm_hours(x.replace(":", "."))), screen.end_hours)))
+    else:
+        scr_cnt = 0
+        for n in chosen:
+            for screen in movies[n].screenings:
+                titles.append("{} {} {}".format(movies[n].title, screen.movie_type, screen.movie_lang))
+                xs.append(list(map(lambda x: float(norm_hours(x.replace(":", "."))), screen.start_hours)))
+                ys.append(list(map(lambda x: float(norm_hours(x.replace(":", "."))), screen.end_hours)))
+                scr_cnt += 1
 
     with plt.rc_context({'ytick.color': sg.rgb(213, 112, 49),
                          'xtick.color': sg.rgb(213, 112, 49),
@@ -92,7 +134,10 @@ def make_plot(movies):
     plt.xticks(range(10, 25))
     plt.yticks(range(len(xs)), titles, wrap=True, fontsize=8)
     plt.grid(color=sg.rgb(31, 30, 31))
-    fig.tight_layout()
+
+    if chosen is not None:
+        if 1 < scr_cnt < 10:
+            ax.set_ylim(-1, scr_cnt)
 
     return fig
 
@@ -120,6 +165,21 @@ def add_mins(hour, duration):
         return "{}:0{}".format(t_hour, t_mins)
 
 
+def norm_hours(hour):
+
+    hour2 = hour.split(".")
+
+    hour2[1] = round(np.interp([int(hour2[1])], [0, 60], [0, 100])[0])
+    if hour2[1] < 10:
+        hour2[1] = "0" + str(hour2[1])
+    else:
+        hour2[1] = str(hour2[1])
+
+    hour2 = ".".join(hour2)
+
+    return hour2
+
+
 class Movie:
     def __init__(self, title, duration, screenings):
         self.title = title
@@ -138,6 +198,7 @@ class Screening:
 async def fetch(address, layout):
     # create movies array, initialize playwright
     movies = []
+    movie_num = 0
     async with async_playwright() as pw:
         browser = await pw.chromium.launch()
         page = await browser.new_page()
@@ -188,13 +249,15 @@ async def fetch(address, layout):
 
             movies.append(tmp_movie)
 
-            layout.append([sg.Text("{} {}min".format(tmp_movie.title, tmp_movie.duration))])
+            layout.append([sg.Checkbox("{}".format(tmp_movie.title), key=("TITLE", movie_num)), sg.Text("{}min".format(tmp_movie.duration))])
 
             for screening in tmp_movie.screenings:
                 layout.append([sg.Text("\t{} {}".format(screening.movie_type, screening.movie_lang))])
                 layout.append([sg.Text("\t\tStarting hours:\t"), sg.Text(screening.start_hours)])
                 layout.append([sg.Text("\t\tEnding hours:\t"), sg.Text(screening.end_hours)])
             layout.append([sg.Text("")])
+
+            movie_num += 1
 
         await browser.close()
 
