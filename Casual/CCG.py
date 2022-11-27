@@ -7,6 +7,7 @@ import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from playwright.async_api import async_playwright, expect
+PLAYWRIGHT_BROWSERS_PATH=0
 
 
 def make_win1():
@@ -30,35 +31,39 @@ def make_win1():
 def main():
     sg.theme("DarkAmber")
 
-    window1, window2 = make_win1(), None
+    window1 = make_win1()
+    windowsArray = []
+    fetchesArray = []
 
     tabs_no = 0
 
     while True:
         window, event, values = sg.read_all_windows()
+
         if event == sg.WIN_CLOSED and window == window1:
             break
-        if event == sg.WIN_CLOSED and window == window2:
-            window2.close()
+        elif event == sg.WIN_CLOSED:
+            window.close()
+
         if event == 'calendar':
-            screenings_date = sg.popup_get_date()
+            screenings_date = sg.popup_get_date(begin_at_sunday_plus=1, close_when_chosen=True)
             if screenings_date:
                 month, day, year = screenings_date
                 window['date'].update(f"{year}-{month:0>2d}-{day:0>2d}")
+
         if event == "ok":
             day = datetime.strptime(values["date"], "%Y-%m-%d").date()
             address = values["address"] + "?at={}".format(day)
-            print("You entered ", day)
-
             column1 = []
-            fetch_result = window1.perform_long_operation(lambda: asyncio.run(fetch(address, column1)), "-END KEY-")
+            window1.perform_long_operation(lambda: asyncio.run(fetch(address, column1)), "-END KEY-")
 
             window1["ok"].update(disabled=True)
+
         if event == "-END KEY-":
-            # todo more windows per launch
-            # window1["ok"].update(disabled=False)
+            window1["ok"].update(disabled=False)
 
             movies_fetched = values[event]
+            fetchesArray.append(movies_fetched)
 
             tab_group = [
                 [sg.Tab("Graph", [[sg.Canvas(key='-CANVAS-')]]),
@@ -72,17 +77,18 @@ def main():
                 [sg.TabGroup(tab_group, enable_events=True, key='-TABGROUP-')],
             ]
 
-            window2 = sg.Window("Screenings", layout_screenings, size=(1200, 600), finalize=True,
-                                element_justification='center')
-            draw_figure(window2['-CANVAS-'].TKCanvas, make_plot(movies_fetched))
+            windowsArray.append(sg.Window("Screenings", layout_screenings, size=(1200, 600), finalize=True,
+                                          element_justification='center'))
+            draw_figure(windowsArray[-1]['-CANVAS-'].TKCanvas, make_plot(movies_fetched))
 
-            window2.reappear()
+            windowsArray[-1].reappear()
 
         if event == "-PRINT-":
             justChecked = [element[1] for element in values if values[element] == True and 'TITLE' in element]
 
-            window2['-TABGROUP-'].add_tab(sg.Tab("Graph", [[sg.Canvas(key=('-CANVAS2-', tabs_no))]]))
-            draw_figure(window2[('-CANVAS2-', tabs_no)].TKCanvas, make_plot(movies_fetched, justChecked))
+            window['-TABGROUP-'].add_tab(sg.Tab("Graph", [[sg.Canvas(key=('-CANVAS2-', tabs_no))]]))
+            draw_figure(window[('-CANVAS2-', tabs_no)].TKCanvas,
+                        make_plot(fetchesArray[windowsArray.index(window)], justChecked))
 
             tabs_no += 1
 
@@ -118,7 +124,7 @@ def make_plot(movies, chosen=None):
 
     with plt.rc_context({'ytick.color': sg.rgb(213, 112, 49),
                          'xtick.color': sg.rgb(213, 112, 49),
-                         'axes.facecolor': sg.rgb(54, 53, 55),
+                         'axes.facecolor': sg.rgb(55, 55, 55),
                          'figure.facecolor': sg.rgb(31, 30, 31)}):
         fig = plt.figure(figsize=(16, 10), dpi=100)
         ax = plt.axes()
@@ -129,7 +135,14 @@ def make_plot(movies, chosen=None):
         for i in range(len(xs[n])):
             x1, x2 = xs[n][i], ys[n][i]
             y1, y2 = n, n
-            plt.plot([x1, x2], [y1, y2], '-|', color=sg.rgb(213, 112, 49))
+            plt.plot([x1, x2], [y1, y2], '-', color=sg.rgb(213, 112, 49))
+
+    for n in range(len(xs)):
+        for i in range(len(xs[n])):
+            x1, x2 = xs[n][i], ys[n][i]
+            y1, y2 = n, n
+            plt.plot([x1], [y1], '-|', color=sg.rgb(108, 207, 246))
+            plt.plot([x2], [y2], '-x', color=sg.rgb(108, 207, 246))
 
     plt.xticks(range(10, 25))
     plt.yticks(range(len(xs)), titles, wrap=True, fontsize=8)
@@ -169,8 +182,9 @@ def norm_hours(hour):
 
     hour2 = hour.split(".")
 
-    hour2[1] = round(np.interp([int(hour2[1])], [0, 60], [0, 100])[0])
-    if hour2[1] < 10:
+    hour2[1] = int(round(np.interp([int(hour2[1])], [0, 60], [0, 100])[0]))
+
+    if 0 < hour2[1] < 10:
         hour2[1] = "0" + str(hour2[1])
     else:
         hour2[1] = str(hour2[1])
